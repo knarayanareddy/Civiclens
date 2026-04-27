@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowLeft, MapPin, Clock, ThumbsUp, Share2,
   Bookmark, BookmarkCheck, Camera, ChevronRight, AlertTriangle,
-  ExternalLink, Send, MoreVertical, User, CheckCircle2, Copy, Link } from 'lucide-react';
+  ExternalLink, Send, MoreVertical, User, CheckCircle2, Copy, Link, Globe, RefreshCw, Zap } from 'lucide-react';
 import { StatusChip, PhotoPlaceholder } from '../components/ui';
 import { getIssueById, getCategoryById, issueEvents, getTimeAgo } from '../data/mockData';
+import { getIntegrationRecord, submitIssueToOpen311, defaultConnector, type Open311IntegrationRecord } from '../data/open311';
+import { notifyComment } from '../data/notifications';
 import type { IssueEvent } from '../types';
 
 // ─── Media Carousel ───────────────────────────────────────
@@ -82,6 +84,12 @@ function CommentComposer({ onPost }: { onPost: (text: string) => void }) {
       setPosting(false);
       setPosted(true);
       onPost(text);
+      // Dispatch notification for comment
+      notifyComment({
+        issueId: 'current',
+        issueTitle: 'Issue',
+        commenterName: 'You',
+      }).catch(() => {});
       setText('');
       setTimeout(() => setPosted(false), 1500);
     }, 600);
@@ -164,6 +172,47 @@ export function IssueDetailScreen({
   const [addPhotoMode, setAddPhotoMode] = useState(false);
   const [stillThereOpen, setStillThereOpen] = useState(false);
   const [reportedAbuse, setReportedAbuse] = useState(false);
+  const [open311Record, setOpen311Record] = useState<Open311IntegrationRecord | null>(null);
+  const [open311Loading, setOpen311Loading] = useState(false);
+  const [open311Submitting, setOpen311Submitting] = useState(false);
+
+  // Load Open311 integration record on mount
+  useEffect(() => {
+    getIntegrationRecord(issueId).then(rec => {
+      if (rec) setOpen311Record(rec);
+    }).catch(() => {});
+  }, [issueId]);
+
+  const handleOpen311Submit = async () => {
+    if (!issue) return;
+    setOpen311Submitting(true);
+    const result = await submitIssueToOpen311({
+      id: issue.id,
+      categoryId: issue.categoryId,
+      lat: issue.lat,
+      lng: issue.lng,
+      description: issue.description,
+      address: issue.address,
+    });
+    if (result.success) {
+      const rec = await getIntegrationRecord(issueId);
+      if (rec) setOpen311Record(rec);
+    }
+    setOpen311Submitting(false);
+  };
+
+  const handleOpen311Sync = async () => {
+    if (!open311Record?.serviceRequestId) return;
+    setOpen311Loading(true);
+    try {
+      const remote = await defaultConnector.getRequest(open311Record.serviceRequestId);
+      if (remote) {
+        const updated = { ...open311Record, remoteStatus: remote.status, rawPayload: remote, lastPolledAt: new Date().toISOString() };
+        setOpen311Record(updated);
+      }
+    } catch {}
+    setOpen311Loading(false);
+  };
 
   if (!issue) {
     return (
@@ -301,6 +350,54 @@ export function IssueDetailScreen({
                 <div key={n} className={`w-3 h-3 rounded-full ${n <= issue.severity ? 'bg-primary' : 'bg-slate-200'}`} />
               ))}
             </div>
+          </div>
+
+          {/* Open311 Integration Status */}
+          <div className="bg-gradient-to-r from-teal-50 to-cyan-50 rounded-xl border border-teal-200/60 overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-teal-100">
+              <Globe size={14} className="text-teal-600" />
+              <span className="text-xs font-semibold text-teal-800">Open311 Integration</span>
+              <span className="ml-auto text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-teal-100 text-teal-700">GeoReport v2</span>
+            </div>
+            {open311Record ? (
+              <div className="px-3 py-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] text-slate-400">Request ID</p>
+                    <p className="text-xs font-mono font-semibold text-teal-700">{open311Record.serviceRequestId || `Token: ${open311Record.token?.slice(0, 12)}…`}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] text-slate-400">Remote status</p>
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${open311Record.remoteStatus === 'closed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {open311Record.remoteStatus}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400">Last polled: {new Date(open311Record.lastPolledAt).toLocaleTimeString()}</span>
+                  <button onClick={handleOpen311Sync} disabled={open311Loading}
+                    className="flex items-center gap-1 text-[10px] font-semibold text-teal-700 bg-teal-100 px-2 py-1 rounded-lg active:bg-teal-200 disabled:opacity-50">
+                    <RefreshCw size={10} className={open311Loading ? 'animate-spin' : ''} />
+                    {open311Loading ? 'Syncing…' : 'Sync'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="px-3 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-slate-600">Not yet submitted to city 311</p>
+                  <p className="text-[10px] text-slate-400">Submit to sync with city systems</p>
+                </div>
+                <button onClick={handleOpen311Submit} disabled={open311Submitting}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 text-white text-xs font-semibold rounded-lg active:bg-teal-700 disabled:opacity-50">
+                  {open311Submitting ? (
+                    <><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Sending…</>
+                  ) : (
+                    <><Zap size={12} /> Submit to 311</>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Action buttons */}

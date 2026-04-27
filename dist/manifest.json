@@ -1,0 +1,19 @@
+{
+  "name": "CivicLens",
+  "short_name": "CivicLens",
+  "description": "Report civic issues. Track fixes. Make your city better.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#0F766E",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='40' fill='%230F766E'/><text x='96' y='120' text-anchor='middle' font-size='90' fill='white'>📍</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ],
+  "categories": ["government", "utilities", "lifestyle"
+  ]
+}

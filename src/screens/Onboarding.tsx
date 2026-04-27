@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { MapPin, Bell, Shield, ArrowRight, Eye, Smartphone, ChevronRight } from 'lucide-react';
+import { MapPin, Bell, Shield, ArrowRight, Eye, Smartphone, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
+import { requestNotificationPermission, getNotificationPermission, initNotifications } from '../data/notifications';
 
 // ─── Splash Screen ────────────────────────────────────────
 export function SplashScreen({ onFinish }: { onFinish: () => void }) {
   useEffect(() => {
+    // Initialize notifications system (register SW) on app boot
+    initNotifications();
     const timer = setTimeout(onFinish, 2500);
     return () => clearTimeout(timer);
   }, [onFinish]);
@@ -45,6 +48,65 @@ export function SplashScreen({ onFinish }: { onFinish: () => void }) {
 
 // ─── Permission Primer ────────────────────────────────────
 export function PermissionPrimer({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) {
+  const [requesting, setRequesting] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<'pending' | 'granted' | 'denied' | 'requesting'>('pending');
+  const [notifStatus, setNotifStatus] = useState<'pending' | 'granted' | 'denied' | 'requesting' | 'unsupported'>('pending');
+
+  // Check initial permission states on mount
+  useEffect(() => {
+    const notifPerm = getNotificationPermission();
+    if (notifPerm === 'granted') setNotifStatus('granted');
+    else if (notifPerm === 'denied') setNotifStatus('denied');
+    else if (notifPerm === 'unsupported') setNotifStatus('unsupported');
+
+    // Check geolocation permission if available
+    if (navigator.permissions) {
+      navigator.permissions.query({ name: 'geolocation' }).then(result => {
+        if (result.state === 'granted') setLocationStatus('granted');
+        else if (result.state === 'denied') setLocationStatus('denied');
+      }).catch(() => {});
+    }
+  }, []);
+
+  const handleContinue = async () => {
+    setRequesting(true);
+
+    // 1. Request geolocation permission
+    setLocationStatus('requesting');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          () => { setLocationStatus('granted'); resolve(); },
+          (err) => {
+            setLocationStatus(err.code === 1 ? 'denied' : 'granted');
+            resolve(); // continue even if denied
+          },
+          { timeout: 10000 }
+        );
+      });
+    } catch {
+      setLocationStatus('denied');
+    }
+
+    // 2. Request notification permission
+    setNotifStatus('requesting');
+    const notifResult = await requestNotificationPermission();
+    setNotifStatus(notifResult === 'granted' ? 'granted' : notifResult === 'denied' ? 'denied' : 'pending');
+
+    // Small delay to show results before transitioning
+    setTimeout(() => {
+      setRequesting(false);
+      onContinue();
+    }, 800);
+  };
+
+  const statusIcon = (status: string) => {
+    if (status === 'granted') return <CheckCircle2 size={16} className="text-green-500" />;
+    if (status === 'denied') return <XCircle size={16} className="text-red-400" />;
+    if (status === 'requesting') return <div className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-500 rounded-full animate-spin" />;
+    return null;
+  };
+
   return (
     <div className="flex-1 flex flex-col bg-white px-6 py-8 animate-fade-in">
       <div className="flex-1 flex flex-col items-center justify-center">
@@ -72,38 +134,46 @@ export function PermissionPrimer({ onContinue, onSkip }: { onContinue: () => voi
 
         {/* Permission Cards */}
         <div className="w-full space-y-3 mt-8">
-          <div className="flex items-start gap-4 p-4 rounded-2xl bg-blue-50 border border-blue-100">
+          <div className={`flex items-start gap-4 p-4 rounded-2xl border transition-colors ${locationStatus === 'granted' ? 'bg-green-50 border-green-200' : locationStatus === 'denied' ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-100'}`}>
             <div className="w-11 h-11 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
               <MapPin size={22} className="text-blue-600" />
             </div>
-            <div>
+            <div className="flex-1">
               <h3 className="font-semibold text-blue-900 text-sm">Location Access</h3>
               <p className="text-blue-700/70 text-xs mt-0.5">Auto-pin issues to the right spot on the map</p>
+              {locationStatus === 'denied' && <p className="text-red-500 text-[10px] mt-1 font-medium">Denied — you can enable in Settings</p>}
             </div>
+            {statusIcon(locationStatus)}
           </div>
 
-          <div className="flex items-start gap-4 p-4 rounded-2xl bg-amber-50 border border-amber-100">
+          <div className={`flex items-start gap-4 p-4 rounded-2xl border transition-colors ${notifStatus === 'granted' ? 'bg-green-50 border-green-200' : notifStatus === 'denied' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-100'}`}>
             <div className="w-11 h-11 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
               <Bell size={22} className="text-amber-600" />
             </div>
-            <div>
+            <div className="flex-1">
               <h3 className="font-semibold text-amber-900 text-sm">Notifications</h3>
               <p className="text-amber-700/70 text-xs mt-0.5">Get updates when your reported issues are fixed</p>
+              {notifStatus === 'denied' && <p className="text-red-500 text-[10px] mt-1 font-medium">Denied — you can enable in Settings</p>}
+              {notifStatus === 'unsupported' && <p className="text-slate-400 text-[10px] mt-1 font-medium">Not supported in this browser</p>}
             </div>
+            {statusIcon(notifStatus)}
           </div>
         </div>
       </div>
 
       {/* Buttons */}
       <div className="space-y-3 mt-8">
-        <button onClick={onContinue}
-          className="w-full py-3.5 bg-primary text-white rounded-2xl font-semibold text-base flex items-center justify-center gap-2 active:scale-[0.97] transition-transform shadow-lg shadow-primary/20"
+        <button onClick={handleContinue} disabled={requesting}
+          className="w-full py-3.5 bg-primary text-white rounded-2xl font-semibold text-base flex items-center justify-center gap-2 active:scale-[0.97] transition-transform shadow-lg shadow-primary/20 disabled:opacity-70"
           aria-label="Continue and grant permissions">
-          Continue
-          <ArrowRight size={18} />
+          {requesting ? (
+            <><div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Requesting…</>
+          ) : (
+            <>Continue <ArrowRight size={18} /></>
+          )}
         </button>
-        <button onClick={onSkip}
-          className="w-full py-3 text-slate-500 font-medium text-sm"
+        <button onClick={onSkip} disabled={requesting}
+          className="w-full py-3 text-slate-500 font-medium text-sm disabled:opacity-50"
           aria-label="Skip permissions">
           Not now
         </button>

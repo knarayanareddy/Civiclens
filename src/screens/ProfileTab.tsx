@@ -321,6 +321,10 @@ export function NotificationPrefs({ onBack }: { onBack: () => void }) {
     statusChanges: true, comments: true, nearbyDigest: false, quietHours: false,
   }));
   const [testSent, setTestSent] = useState(false);
+  const [permissionState, setPermissionState] = useState<string>(() =>
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  );
+  const [requesting, setRequesting] = useState(false);
 
   const updatePref = (key: string, value: boolean) => {
     const next = { ...prefs, [key]: value };
@@ -328,22 +332,93 @@ export function NotificationPrefs({ onBack }: { onBack: () => void }) {
     saveState('notifPrefs', next);
   };
 
+  const handleRequestPermission = async () => {
+    if (!('Notification' in window)) return;
+    setRequesting(true);
+    try {
+      const result = await Notification.requestPermission();
+      setPermissionState(result);
+    } catch {
+      setPermissionState('denied');
+    }
+    setRequesting(false);
+  };
+
   const handleTest = () => {
     setTestSent(true);
     if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification('CivicLens Test', { body: 'This is a test notification. If you see this, notifications are working!' });
+      // Use SW notification for richer experience
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then(reg => {
+          reg.showNotification('CivicLens Test', {
+            body: 'Push notifications are working! 🎉 You\'ll be notified when issues are updated.',
+            icon: '/icon-192.png',
+            badge: '/icon-192.png',
+            tag: 'test-notification',
+          } as NotificationOptions);
+        }).catch(() => {
+          new Notification('CivicLens Test', { body: 'Notifications are working! 🎉' });
+        });
+      } else {
+        new Notification('CivicLens Test', { body: 'Notifications are working! 🎉' });
+      }
     } else if ('Notification' in window && Notification.permission !== 'denied') {
       Notification.requestPermission().then(perm => {
-        if (perm === 'granted') new Notification('CivicLens Test', { body: 'Notifications are working!' });
+        setPermissionState(perm);
+        if (perm === 'granted') new Notification('CivicLens Test', { body: 'Notifications are working! 🎉' });
       });
     }
     setTimeout(() => setTestSent(false), 3000);
+  };
+
+  const permBadge = () => {
+    if (permissionState === 'granted') return (
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-green-50 border border-green-200 rounded-xl mb-3">
+        <CheckCircle2 size={16} className="text-green-600" />
+        <div className="flex-1">
+          <p className="text-xs font-semibold text-green-700">Notifications enabled</p>
+          <p className="text-[10px] text-green-600/70">Browser permission granted</p>
+        </div>
+      </div>
+    );
+    if (permissionState === 'denied') return (
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-red-50 border border-red-200 rounded-xl mb-3">
+        <XCircle size={16} className="text-red-500" />
+        <div className="flex-1">
+          <p className="text-xs font-semibold text-red-700">Notifications blocked</p>
+          <p className="text-[10px] text-red-500/70">Re-enable in browser settings</p>
+        </div>
+      </div>
+    );
+    if (permissionState === 'unsupported') return (
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl mb-3">
+        <Bell size={16} className="text-slate-400" />
+        <div className="flex-1">
+          <p className="text-xs font-semibold text-slate-600">Not supported</p>
+          <p className="text-[10px] text-slate-400">This browser doesn't support push notifications</p>
+        </div>
+      </div>
+    );
+    return (
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl mb-3">
+        <Bell size={16} className="text-amber-600" />
+        <div className="flex-1">
+          <p className="text-xs font-semibold text-amber-700">Permission needed</p>
+          <p className="text-[10px] text-amber-600/70">Allow notifications to get issue updates</p>
+        </div>
+        <button onClick={handleRequestPermission} disabled={requesting}
+          className="px-3 py-1.5 bg-amber-500 text-white text-[10px] font-bold rounded-lg active:scale-95 transition-transform disabled:opacity-60">
+          {requesting ? '…' : 'Enable'}
+        </button>
+      </div>
+    );
   };
 
   return (
     <div className="flex-1 flex flex-col bg-white">
       <HeaderBar title="Notifications" onBack={onBack} />
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-1 no-scrollbar">
+        {permBadge()}
         {[
           { key: 'statusChanges' as const, icon: Volume2, label: 'Status changes', desc: 'When an issue is updated' },
           { key: 'comments' as const, icon: FileText, label: 'Comments', desc: 'When someone comments on your issues' },
@@ -361,11 +436,12 @@ export function NotificationPrefs({ onBack }: { onBack: () => void }) {
             <ToggleSwitch checked={prefs[item.key]} onChange={v => updatePref(item.key, v)} label={item.label} />
           </div>
         ))}
-        <button onClick={handleTest} className="flex items-center gap-3 py-4 w-full text-left active:opacity-70">
+        <button onClick={handleTest} disabled={permissionState === 'denied' || permissionState === 'unsupported'}
+          className="flex items-center gap-3 py-4 w-full text-left active:opacity-70 disabled:opacity-40">
           <Send size={18} className="text-slate-400" />
           <div className="flex-1">
             <p className="text-sm font-medium text-slate-700">Test notification</p>
-            <p className="text-[10px] text-slate-400">{testSent ? 'Notification sent!' : 'Send a test push notification'}</p>
+            <p className="text-[10px] text-slate-400">{testSent ? 'Notification sent! 🎉' : 'Send a test push notification'}</p>
           </div>
           {testSent && <CheckCircle2 size={16} className="text-green-500" />}
         </button>

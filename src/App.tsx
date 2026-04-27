@@ -29,6 +29,8 @@ import { ProfileHome, PrivacySettings, NotificationPrefs, HelpScreen, StaffLogin
 import { IssueDetailScreen } from './screens/IssueDetail';
 import { mockUser, getUserLocation, loadState, saveState, getCategoryById, issues as allIssues } from './data/mockData';
 import { dbInitIfEmpty, dbCreateSession, dbGetSession, dbDestroySession, checkRateLimit, dbExportAllData, dbDeleteAllUserData, dbStorePhoto } from './data/db';
+import { notifySubmitSuccess, notifyStatusChange } from './data/notifications';
+import { submitIssueToOpen311 } from './data/open311';
 import type { TabName, ReportDraft } from './types';
 
 type AppScreen =
@@ -128,11 +130,12 @@ export default function App() {
     if (!draft) return;
     const newId = `iss-new-${Date.now()}`;
     const cat = getCategoryById(draft.categoryId || 'cat-12');
+    const issueTitle = draft.note ? draft.note.slice(0, 60) : `${cat?.name || 'Issue'} report`;
     const newIssue = {
       id: newId, jurisdictionId: 'jur-001',
       reporterUserId: 'user-001', reporterName: user.isGuest ? 'Guest' : user.displayName,
       categoryId: draft.categoryId || 'cat-12', status: 'SUBMITTED' as const,
-      title: draft.note ? draft.note.slice(0, 60) : `${cat?.name || 'Issue'} report`,
+      title: issueTitle,
       description: draft.note || 'New civic issue reported',
       lat: draft.lat, lng: draft.lng, severity: draft.severity,
       isUnsafeNow: draft.isUnsafeNow, isAnonymous: draft.isAnonymous,
@@ -146,6 +149,19 @@ export default function App() {
     setLastSubmittedId(newId);
     setFollowedIssues(prev => new Set(prev).add(newId));
     setReportStep(7);
+
+    // Dispatch push notification for successful submission
+    notifySubmitSuccess({ issueId: newId, issueTitle }).catch(() => {});
+
+    // Auto-submit to Open311 in background
+    submitIssueToOpen311({
+      id: newId,
+      categoryId: draft.categoryId || 'cat-12',
+      lat: draft.lat,
+      lng: draft.lng,
+      description: draft.note || 'New civic issue reported',
+      address: draft.address,
+    }).catch(() => {});
   }, [draft, user]);
   const editReportStep = useCallback((step: number) => setReportStep(step), []);
 
@@ -231,7 +247,15 @@ export default function App() {
               {screen.type === 'help' && <HelpScreen onBack={handleBack} onNavigate={handleProfileNav} />}
               {screen.type === 'staff_login' && <StaffLogin onLogin={handleStaffLogin} onBack={handleBack} />}
               {screen.type === 'staff_queue' && <StaffQueue onOpenIssue={id => navigateTo({ type: 'staff_detail', issueId: id })} onBack={handleBack} />}
-              {screen.type === 'staff_detail' && <StaffIssueDetail issueId={screen.issueId} onBack={() => navigateTo({ type: 'staff_queue' })} onUpdateStatus={(_id: string, _s: string) => {}} />}
+              {screen.type === 'staff_detail' && <StaffIssueDetail issueId={screen.issueId} onBack={() => navigateTo({ type: 'staff_queue' })} onUpdateStatus={(id: string, newStatus: string) => {
+                const issue = allIssues.find(i => i.id === id);
+                if (issue) {
+                  const oldStatus = issue.status;
+                  issue.status = newStatus as any;
+                  issue.updatedAt = new Date().toISOString();
+                  notifyStatusChange({ issueId: id, issueTitle: issue.title, oldStatus, newStatus }).catch(() => {});
+                }
+              }} />}
               {screen.type === 'export' && <ExportDataScreen onBack={handleBack} />}
               {screen.type === 'accessibility' && <AccessibilityScreen onBack={handleBack} />}
               {screen.type === 'report_abuse' && <ReportAbuseScreen onBack={handleBack} />}
